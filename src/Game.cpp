@@ -1,5 +1,6 @@
 #include "Game.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -14,24 +15,8 @@ Game::~Game() {}
 
 bool Game::init()
 {
-  // Check bird texture
-  if (!bird_texture.loadFromFile("Data/Images/bird.png"))
-  {
-    std::cout << "Bird failed to load\n";
-    return false;
-  }
-
-  // Check fox texture
-  if (!fox_texture.loadFromFile("Data/Images/fox_Right.png"))
-  {
-    std::cout << "Fox failed to load\n";
-    return false;
-  }
-
-  // Connect sprites to textures
-  bird.setTexture(bird_texture);
-  fox.setTexture(fox_texture);
-  fox2.setTexture(fox_texture);
+  // Textures are already loaded by the members in Game.h,
+  // so here we just set up the sprites and text.
 
   // Bird setup
   bird.setOrigin({ bird.getLocalBounds().size.x / 2.0f,
@@ -51,12 +36,23 @@ bool Game::init()
   fox2.setPosition({ 500, 300 });
   fox2.setScale({ 0.5f, 0.5f });
 
+  // Bad character setup (red bird, don't click it!)
+  bad.setOrigin(
+    { bad.getLocalBounds().size.x / 2.0f, bad.getLocalBounds().size.y / 2.0f });
+  bad.setPosition({ 800, 400 });
+  bad.setScale({ 0.5f, 0.5f });
+  bad.setColor(sf::Color::Red);
+
   // Title setup
-  title_text.setCharacterSize(50);
   title_text.setPosition(
     { window.getSize().x / 2.0f - title_text.getGlobalBounds().size.x / 2.0f,
       50 });
   title_text.setFillColor(sf::Color(255, 255, 255, 200));
+
+  // Welcome text
+  welcome_text.setPosition(
+    { window.getSize().x / 2.0f - welcome_text.getGlobalBounds().size.x / 2.0f,
+      150 });
 
   // Play button
   play_text_menu.setPosition(
@@ -72,8 +68,15 @@ bool Game::init()
       window.getSize().y / 2.0f -
         quit_text_menu.getGlobalBounds().size.y / 2.0f });
 
-  // Score position
-  score_text.setPosition({ 650, 20 });
+  // Score and timer positions
+  score_text.setPosition({ window.getSize().x - 220.0f, 20 });
+  timer_text.setPosition({ 20, 20 });
+
+  // Game over text
+  game_over_text.setFillColor(sf::Color::Red);
+  game_over_text.setPosition({ window.getSize().x / 2.0f -
+                                 game_over_text.getGlobalBounds().size.x / 2.0f,
+                               window.getSize().y / 2.0f });
 
   return true;
 }
@@ -92,10 +95,30 @@ void Game::render()
     window.draw(bird);
     window.draw(fox);
     window.draw(fox2);
+    window.draw(bad);
 
     window.draw(title_text);
     window.draw(score_text);
+    window.draw(timer_text);
+
+    if (game_over)
+    {
+      window.draw(game_over_text);
+    }
   }
+}
+
+void Game::restart()
+{
+  game_over = false;
+  time_left = round_time;
+  score     = 0;
+  score_text.setString("Score: 0");
+  timer_text.setString("Time: " + std::to_string((int)round_time));
+
+  respawnAnimal(fox, fox_velocity);
+  respawnAnimal(fox2, fox2_velocity);
+  respawnAnimal(bad, bad_velocity);
 }
 
 void Game::mouseClicked(sf::Event event)
@@ -122,8 +145,23 @@ void Game::mouseClicked(sf::Event event)
   }
   else
   {
+    // Click anywhere to play again after game over
+    if (game_over)
+    {
+      restart();
+      return;
+    }
+
+    // Check the bad character first: clicking it costs points and time
+    if (collisionCheck(click, bad))
+    {
+      score     = std::max(0, score - 3);
+      time_left = std::max(0.0f, time_left - 3.0f);
+      std::cout << "BAD HIT! -3 points, -3 seconds" << std::endl;
+      respawnAnimal(bad, bad_velocity);
+    }
     // Check if the bird was clicked
-    if (collisionCheck(click, bird))
+    else if (collisionCheck(click, bird))
     {
       score++;
       std::cout << "BIRD HIT!" << std::endl;
@@ -151,8 +189,17 @@ void Game::mouseClicked(sf::Event event)
 
 void Game::update(float dt)
 {
-  if (!in_menu)
+  if (!in_menu && !game_over)
   {
+    // COUNTDOWN
+    time_left -= dt;
+    if (time_left <= 0.0f)
+    {
+      time_left = 0.0f;
+      game_over = true;
+    }
+    timer_text.setString("Time: " + std::to_string((int)std::ceil(time_left)));
+
     // BIRD MOVEMENT
     if (bird.getPosition().x >= window.getSize().x - bird.getGlobalBounds().size.x)
     {
@@ -186,14 +233,21 @@ void Game::update(float dt)
 
     // FOX MOVEMENT
     moveAnimal(fox, fox_velocity, dt);
-
-    // SECOND FOX MOVEMENT
     moveAnimal(fox2, fox2_velocity, dt);
+
+    // BAD CHARACTER MOVEMENT
+    moveAnimal(bad, bad_velocity, dt);
   }
 }
 
 void Game::keyPressed(sf::Event::KeyPressed keyPressEvent)
 {
+  // Menu keys only work on the menu
+  if (!in_menu)
+  {
+    return;
+  }
+
   if (
     keyPressEvent.scancode == sf::Keyboard::Scan::Left ||
     keyPressEvent.scancode == sf::Keyboard::Scan::Right)
@@ -226,10 +280,8 @@ void Game::keyPressed(sf::Event::KeyPressed keyPressEvent)
 
 bool Game::collisionCheck(sf::Vector2i click, sf::Sprite sprite)
 {
-  // Get the sprite's bounding box
+  // Check if the mouse click is inside the sprite's bounding box
   sf::FloatRect bounds = sprite.getGlobalBounds();
-
-  // Check if the mouse click is inside the sprite
   return bounds.contains(
     { static_cast<float>(click.x), static_cast<float>(click.y) });
 }
@@ -304,7 +356,7 @@ void Game::respawnAnimal(sf::Sprite& animal, sf::Vector2f& velocity)
   float half_w         = bounds.size.x / 2.0f;
   float half_h         = bounds.size.y / 2.0f;
 
-  // std::max(1, ...) stops a divide-by-zero if the sprite is bigger than the
+  // std::max(1, ...) stops a divide-by-zero if a sprite is bigger than the
   // window
   int range_x =
     std::max(1, static_cast<int>(window.getSize().x - bounds.size.x));
